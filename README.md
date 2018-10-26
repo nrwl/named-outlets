@@ -1,27 +1,105 @@
-# Ngtest
+# Updating a Root Named Outlet Using a Nested Route
 
-This project was generated with [Angular CLI](https://github.com/angular/angular-cli) version 6.2.4.
 
-## Development server
+## If Your Url Looks Like This: /parent/child1(nav:child1nav)`
 
-Run `ng serve` for a dev server. Navigate to `http://localhost:4200/`. The app will automatically reload if you change any of the source files.
+If you have a named segment in the URL (e.g., `/parent/child1(nav:child1nav)`, then you have a bunch of options. The easiest one would be to provision a separate route for the nav.
 
-## Code scaffolding
+## If Your Url Looks Like This: /parent/child1`
 
-Run `ng generate component component-name` to generate a new component. You can also use `ng generate directive|pipe|service|class|guard|interface|enum|module`.
+If you don't have the named segment present in the URL, it is harder. It's difficult because you have to rely on the empty path fragment and those are special-cased in the router itself. So you will end up having something like this:
 
-## Build
+```
+{
+     path: 'parent',
+     component: ParentComponent,
+     children: [
+       {path: 'child1', children: [
+         {path: '', component: Child1Component}
+         {path: '', outlet: 'named', component: Named1Component}
+       ]},
+       {path: 'child2', component: Child2Component}
+     ]
+}
+```
 
-Run `ng build` to build the project. The build artifacts will be stored in the `dist/` directory. Use the `--prod` flag for a production build.
+The problem here is that both the main and the named outlets have to be siblings in the parent component, which isn't what you want. See branch `nesting_named_outlets` for more information.
 
-## Running unit tests
+You could try to override `rootContexts: ChildrenOutletContexts` to bypass that, but it'll create problems as it's not the supported use case. Using a custom path matcher doesn't work won't work either. It's because empty path routes are special.
 
-Run `ng test` to execute the unit tests via [Karma](https://karma-runner.github.io).
+### Potential Solution
 
-## Running end-to-end tests
+You could create a directive that is similar to a router outlet and that will scan the router state and find a registered navigation component.
 
-Run `ng e2e` to execute the end-to-end tests via [Protractor](http://www.protractortest.org/).
+In this case, the configuration will look like this:
 
-## Further help
+```
+ RouterModule.forRoot([
+      {
+        path: 'parent',
+        component: ParentComponent,
+        children: [
+          {path: 'child1', component: Child1Component, data: {nav: Named1Component}},
+          {path: 'child2', component: Child2Component, data: {nav: Named2Component}}
+        ]
+      }
+    ])
+```   
 
-To get more help on the Angular CLI use `ng help` or go check out the [Angular CLI README](https://github.com/angular/angular-cli/blob/master/README.md).
+And you will define your outlet directive like this:
+
+```
+
+@Directive({
+  selector: '[appNavigation]'
+})
+export class NavigationDirective {
+  componentRef: ComponentRef<any>;
+
+  constructor(router: Router, resolver: ComponentFactoryResolver, viewContainerRef: ViewContainerRef) {
+    router.events.pipe(filter(e => e instanceof NavigationEnd)).subscribe(e => {
+      viewContainerRef.clear();
+      // find a node in the router state that specified what needs to be loaded in the navigation bar
+      const node = this.findNavNode(router.routerState.snapshot.root);
+      if (node) {
+        // this is needed to handle lazy loading. if a module is lazy loaded, we need to grab its injector instead of the root one.
+        const config = this.closestLoadedConfig(node);
+        if (config) {
+          const factory = config.module.componentFactoryResolver.resolveComponentFactory(node.data.nav);
+          this.componentRef = viewContainerRef.createComponent(factory, 0, config.module.injector);
+        } else {
+          const factory = resolver.resolveComponentFactory(node.data.nav);
+          this.componentRef = viewContainerRef.createComponent(factory);
+        }
+      }
+    });
+  }
+
+  private findNavNode(node: ActivatedRouteSnapshot) {
+    if (node.data && node.data.nav) {
+      return node;
+    }
+    const navs = node.children.map(c => this.findNavNode(c)).filter(r => !!r);
+    if (navs.length > 1) {
+      throw new Error('More than one nav defined');
+    } else if (navs.length === 1) {
+      return navs[0];
+    } else {
+      return null;
+    }
+  }
+
+  private closestLoadedConfig(snapshot: ActivatedRouteSnapshot): LoadedRouterConfig|null {
+    if (!snapshot) { return null; }
+    for (let s = snapshot.parent; s; s = s.parent) {
+      const route = s.routeConfig as any;
+      if (route && route._loadedConfig) { return route._loadedConfig; }
+    }
+    return null;
+  }
+}
+```
+
+It's a bit crafty. This is to handle lazy loading correctly. See the `nav_implemented` branch for more information.
+
+
