@@ -1,8 +1,20 @@
 import { BrowserModule } from '@angular/platform-browser';
-import {Component, NgModule} from '@angular/core';
+import {
+  Component,
+  ComponentFactory,
+  ComponentFactoryResolver,
+  ComponentRef,
+  Directive,
+  Injector,
+  NgModule,
+  OnDestroy,
+  ViewContainerRef
+} from '@angular/core';
 
 import { AppComponent } from './app.component';
-import {Router, RouterModule} from '@angular/router';
+import {ActivatedRouteSnapshot, NavigationEnd, Router, RouterModule, RouterStateSnapshot} from '@angular/router';
+import {filter} from 'rxjs/operators';
+import {LoadedRouterConfig} from '@angular/router/src/config';
 
 @Component({
   template: `
@@ -39,12 +51,66 @@ export class Named1Component {}
 })
 export class Named2Component {}
 
+@Directive({
+  selector: '[appNavigation]'
+})
+export class NavigationDirective {
+  componentRef: ComponentRef<any>;
+
+  constructor(router: Router, resolver: ComponentFactoryResolver, viewContainerRef: ViewContainerRef) {
+    router.events.pipe(filter(e => e instanceof NavigationEnd)).subscribe(e => {
+      viewContainerRef.clear();
+      // find a node in the router state that specified what needs to be loaded in the navigation bar
+      const node = this.findNavNode(router.routerState.snapshot.root);
+      if (node) {
+        // this is needed to handle lazy loading. if a module is lazy loaded, we need to grab its injector instead of the root one.
+        const config = this.closestLoadedConfig(node);
+        if (config) {
+          const factory = config.module.componentFactoryResolver.resolveComponentFactory(node.data.nav);
+          this.componentRef = viewContainerRef.createComponent(factory, 0, config.module.injector);
+        } else {
+          const factory = resolver.resolveComponentFactory(node.data.nav);
+          this.componentRef = viewContainerRef.createComponent(factory);
+        }
+      }
+    });
+  }
+
+  private findNavNode(node: ActivatedRouteSnapshot) {
+    if (node.data && node.data.nav) {
+      return node;
+    }
+    const navs = node.children.map(c => this.findNavNode(c)).filter(r => !!r);
+    if (navs.length > 1) {
+      throw new Error('More than one nav defined');
+    } else if (navs.length === 1) {
+      return navs[0];
+    } else {
+      return null;
+    }
+  }
+
+  private closestLoadedConfig(snapshot: ActivatedRouteSnapshot): LoadedRouterConfig|null {
+    if (!snapshot) { return null; }
+    for (let s = snapshot.parent; s; s = s.parent) {
+      const route = s.routeConfig as any;
+      if (route && route._loadedConfig) { return route._loadedConfig; }
+    }
+    return null;
+  }
+}
+
 @NgModule({
   declarations: [
     AppComponent,
     ParentComponent,
     Child1Component,
     Child2Component,
+    Named1Component,
+    Named2Component,
+    NavigationDirective
+  ],
+  entryComponents: [
     Named1Component,
     Named2Component
   ],
@@ -55,14 +121,14 @@ export class Named2Component {}
         path: 'parent',
         component: ParentComponent,
         children: [
-          {path: 'child1', component: Child1Component},
-          {path: 'child2', component: Child2Component}
+          {path: 'child1', component: Child1Component, data: {nav: Named1Component}},
+          {path: 'child2', component: Child2Component, data: {nav: Named2Component}}
         ]
       },
       {
         path: '',
-        outlet: 'named',
-        component: Named2Component
+        pathMatch: 'full',
+        redirectTo: '/parent/child1'
       }
     ])
   ],
@@ -71,8 +137,5 @@ export class Named2Component {}
 })
 export class AppModule {
   constructor(router: Router) {
-    setTimeout(() => {
-      router.navigateByUrl('/parent/child1');
-    }, 0);
   }
 }
