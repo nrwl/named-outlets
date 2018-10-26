@@ -2,7 +2,8 @@ import { BrowserModule } from '@angular/platform-browser';
 import {Component, NgModule} from '@angular/core';
 
 import { AppComponent } from './app.component';
-import {Router, RouterModule} from '@angular/router';
+import {NavigationEnd, Router, RouterModule, RoutesRecognized} from '@angular/router';
+import {filter} from 'rxjs/operators';
 
 @Component({
   template: `
@@ -56,13 +57,13 @@ export class Named2Component {}
         component: ParentComponent,
         children: [
           {path: 'child1', component: Child1Component},
+          {
+            path: '',
+            outlet: 'named',
+            component: Named2Component
+          },
           {path: 'child2', component: Child2Component}
         ]
-      },
-      {
-        path: '',
-        outlet: 'named',
-        component: Named2Component
       }
     ])
   ],
@@ -71,6 +72,9 @@ export class Named2Component {}
 })
 export class AppModule {
   constructor(router: Router) {
+    router.events.pipe(filter(e => e instanceof RoutesRecognized)).subscribe((e: RoutesRecognized) => {
+      console.log(e.state);
+    });
     setTimeout(() => {
       router.navigateByUrl('/parent/child1');
     }, 0);
